@@ -1,11 +1,11 @@
 
 # Citation Extraction Pipeline (Multilingual Humanities Texts)
 
-This repository contains a full NLP pipeline for extracting and reconstructing inline citations from scanned, multilingual academic texts. The system is designed for structurally inconsistent sources like Assyriological publications in English and French.
+This repository implements a full NLP pipeline for extracting and reconstructing inline citations from scanned, multilingual academic texts. The system is designed to handle structurally inconsistent sources like Assyriological publications in English and French.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 .
@@ -24,30 +24,23 @@ This repository contains a full NLP pipeline for extracting and reconstructing i
 
 ---
 
-## 🧠 Step 1: Sentence Segmentation
+## Step 1: Sentence Segmentation
 
-We begin with a raw OCR `.txt` file. `extract_sentences.py` performs:
+The pipeline begins with a raw OCR `.txt` file. The script `extract_sentences.py` performs:
 
-- Hyphen correction and line flattening
-- Regex-based sentence splitting
-- Filtering short/noisy segments
+- Line break and hyphen cleanup
+- Regular expression–based sentence segmentation
+- Filtering by sentence length to remove OCR noise
 
-**Output:** `sentences.csv` — one sentence per row.
+Output: `sentences.csv` — one cleaned sentence per row, used as input to the citation candidate model.
 
 ---
 
-## 🤖 Step 2: Citation Candidate Extraction (LLaMA 3)
+## Step 2: Citation Candidate Extraction using Meta-LLaMA-3-8B-Instruct-iMatrix
 
-The script `extract_candidates_llama.py` prompts `Meta-LLaMA-3-8B-Instruct-iMatrix` with few-shot examples to detect citation-like spans.
+The script `extract_candidates_llama.py` prompts Meta’s instruction-tuned model using few-shot examples to identify citation spans embedded in prose.
 
-**Model:**
-- `meta-llama/Meta-LLaMA-3-8B-Instruct-iMatrix`
-- Few-shot, instruction-following format
-
-**Parameters:**
-- `temperature = 0.0`
-- `max_new_tokens = 100`
-- `do_sample = False`
+**Model:** `meta-llama/Meta-LLaMA-3-8B-Instruct-iMatrix`
 
 **Prompt Format:**
 ```
@@ -58,80 +51,94 @@ Text:
 <Your Sentence Here>
 ```
 
-**Output:** JSON list of sentences + extracted citations.
+**Inference Parameters:**
+- `temperature = 0.0` (for deterministic output)
+- `max_new_tokens = 100`
+- `do_sample = False` (greedy decoding)
+- `top_k = 1` (no randomness)
+- Sentences are processed one at a time to avoid truncation
+
+**Output:** `candidates.json`, a list of original sentences paired with extracted citation-like spans.
 
 ---
 
-## 🧩 Step 3: Full Citation Reconstruction (BiLSTM + NER)
+## Step 3: Full Citation Reconstruction with BiLSTM + NER
 
-### Model Architecture:
-- **Embedding layer:** 100 dimensions, trained on the OCR corpus
-- **BiLSTM:** 64 hidden units (bidirectional)
-- **Dense output:** TimeDistributed layer with softmax
+Once citation spans are extracted, we apply a sequence tagging model to recover structured citation metadata.
 
-### Training:
-- **Data:** 1,200 manually labeled citation fragments
-- **Tag format:** BIO (e.g., B-AUTHOR, I-TITLE)
-- **Loss:** Categorical Cross-Entropy
+### Model Architecture
+- **Embedding layer:** 100-dimensional word embeddings trained from scratch on the corpus
+- **BiLSTM layer:** 64 hidden units in each direction
+- **TimeDistributed dense layer** with softmax output over BIO-formatted tags
+
+### BIO Tags
+We use token-level labels such as:
+- `B-AUTHOR`, `I-AUTHOR`
+- `B-TITLE`, `I-TITLE`
+- `B-YEAR`, `B-PAGE`, `B-VOLUME`, `B-NOTE`, etc.
+- `O` for outside tokens
+
+### Training Details
+- **Dataset:** ~1,200 manually labeled citation fragments
+- **Batch size:** 32
+- **Sequence length:** 100 tokens
 - **Optimizer:** Adam
-- **Epochs:** 10–15 with early stopping
+- **Learning rate:** 0.001
+- **Loss function:** Categorical cross-entropy
+- **Dropout:** 0.2
+- **Epochs:** 10–15 with early stopping on development loss
+- **Evaluation:** Token-level and span-level F1 score
 
-**Output:** Tagged token sequences are reassembled into structured citation records (CSV or BibTeX).
-
----
-
-## 📊 Evaluation
-
-### Step 2 (LLaMA):
-- **English Accuracy:** 81%
-- **French Accuracy:** 79%
-
-### Step 3 (BiLSTM+NER):
-- **English Accuracy:** 96.5%
-- **French Accuracy:** 89.4%
+**Output:** Labeled token sequences, post-processed into structured fields (Author, Title, Year, Volume, Page, Notes), saved as `reconstructed.csv`.
 
 ---
 
-## 📤 Export to Zotero
+## Step 4: Zotero Export
 
-Final output can be exported as:
+Final structured outputs are converted into:
+- `.csv`: Tabular metadata
+- `.bib`: BibTeX entries for LaTeX use
+- `.json`: Zotero-compatible records for reference manager import
 
-- `.csv`: structured table of fields
-- `.bib`: for LaTeX use
-- `.json`: Zotero import format
-
----
-
-## 📚 Citation Format Fields
-
-Each final record contains:
-
-- `Author`
-- `Title`
-- `Journal / Book`
-- `Volume`
-- `Year`
-- `Pages`
-- `Notes`
+Where citation fields (e.g., titles or years) are missing, placeholders are used to flag incomplete entries for later manual editing or metadata lookup.
 
 ---
 
-## 🛠 Dependencies
+## Evaluation Results
+
+**Step 2 – LLaMA (citation fragment extraction):**
+- English average similarity: 81%
+- French average similarity: 79%
+
+**Step 3 – BiLSTM + NER (structured reconstruction):**
+- English average similarity: 96.5%
+- French average similarity: 89.4%
+
+Performance was measured using normalized Levenshtein distance, token alignment, and span-level precision.
+
+---
+
+## Notes on Language Performance
+
+The lower French accuracy is attributed to:
+- Heavier abbreviation usage in journal names
+- OCR degradation in accented characters and ligatures
+- More frequent non-standard punctuation and chaining of citations
+
+Future improvements may include abbreviation expansion dictionaries and better sentence segmentation tuned for French-language conventions.
+
+---
+
+## Dependencies
 
 - Python ≥ 3.8
 - `transformers`
 - `pandas`
 - `torch`
 - `scikit-learn`
-- (Optional) GPU for inference
+- `sentencepiece`
+- GPU recommended for inference and training
 
 ---
 
-## 📎 Notes
-
-- French citation accuracy is slightly lower due to abbreviation density, OCR noise, and variable typographic norms.
-- Embeddings were trained from scratch rather than using GloVe to better capture domain-specific vocabulary.
-
----
-
-For questions or contributions, feel free to open an issue or reach out.
+This pipeline is optimized for multilingual humanities research and supports integration into bibliographic workflows such as Zotero or LaTeX-based citation systems.
